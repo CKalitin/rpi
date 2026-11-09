@@ -1,0 +1,13 @@
+[Unit]
+Description=Blink status LED (GPIO 18) until the e-Paper clock is running
+Documentation=file:/home/admin/rpi/README.md
+# Start as early as possible in boot; needs only /usr and /dev, both up by now.
+DefaultDependencies=no
+Conflicts=shutdown.target
+Before=shutdown.target
+
+[Service]
+ExecStart=/usr/local/sbin/epd-boot-blink
+
+[Install]
+WantedBy=sysinit.target

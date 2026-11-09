@@ -1,0 +1,13 @@
+#!/bin/sh
+# Blink the status LED on GPIO 18 (header pin 12) while the Pi boots.
+# Run by epd-boot-blink.service. See /home/admin/README.md.
+#
+# pinctrl writes the GPIO registers directly without claiming the line, so it
+# never blocks epd_clock.py. Stops as soon as epd_clock.py claims the line
+# (gpioinfo then shows a consumer); the clock takes over the LED from there.
+while ! gpioinfo -c gpiochip0 18 | grep -q consumer; do
+    pinctrl set 18 op dh
+    sleep 0.5
+    pinctrl set 18 op dl
+    sleep 0.5
+done

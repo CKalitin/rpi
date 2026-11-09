@@ -219,3 +219,15 @@ timedatectl                                  # system time, sync status
 dmesg | grep rtc                             # RTC driver messages
 sudo modprobe i2c-dev && sudo i2cdetect -y 1 # scan I2C (RTC shows as UU at 68)
 ```
+
+## System files (`system/`)
+
+Copies of files installed outside this repo, kept here so they are tracked.
+They are copied as installed; reinstall with:
+
+```sh
+sudo install -m 755 system/epd-boot-blink /usr/local/sbin/
+sudo install -m 644 system/epd-boot-blink.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable epd-boot-blink
+sudo cp system/config.txt /boot/firmware/config.txt   # then reboot
+```
