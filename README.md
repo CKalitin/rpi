@@ -8,6 +8,24 @@ LED on GPIO 18 blinks while booting and stays on once the clock is drawing.
 Pin numbers below are **physical header pins** (1-40) unless written as
 "GPIO n", which is the BCM number used in code.
 
+## Dependencies (not in this repo)
+
+The scripts need **Waveshare's e-Paper library cloned at `/home/admin/e-Paper`**.
+It is not included here: it's Waveshare's own repo (about 2 GB, unmodified),
+and the scripts load the driver and font from that path (`sys.path.insert` and
+`FONT` near the top of each script). On a fresh Pi:
+
+```sh
+sudo apt install python3-gpiozero python3-lgpio python3-spidev python3-pil i2c-tools git
+git clone https://github.com/waveshareteam/e-Paper.git /home/admin/e-Paper
+git -C /home/admin/e-Paper checkout a794fbc   # the tested version
+git clone https://github.com/CKalitin/rpi.git /home/admin/rpi
+```
+
+Then apply the config changes and install the files in `system/` (see
+"Configuration changes from a stock install" and "System files" below), and
+add the cron entry `@reboot /home/admin/rpi/start_epd_clock.sh`.
+
 ## Wiring
 
 ### e-Paper display -> Pi (8 wires)
