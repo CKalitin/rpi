@@ -11,6 +11,10 @@ Updates every second with a partial refresh (as fast as the panel allows),
 and a full refresh every FULL_REFRESH_SECONDS to clear ghosting. Each refresh
 duration is logged to stderr.
 
+Holding the button (GPIO 26) for 1 s switches between this clock page and the
+encoder page (encoder_page.py), which updates once a second whatever the
+--minutes setting. The switch redraws at once with a full refresh.
+
 READY_PIN (GPIO 18, header pin 12) drives a status LED. It blinks from startup
 until the first frame is drawn, then stays high while refreshes succeed. It
 goes low if a refresh fails and when the script exits (including on SIGTERM at
@@ -27,11 +31,13 @@ Usage: python3 epd_clock.py            # run until Ctrl-C
        python3 epd_clock.py --minutes  # HH:MM, updated once a minute
        python3 epd_clock.py --quiet    # don't log each refresh (for unattended runs)
        python3 epd_clock.py --tz=Europe/London   # show another timezone
+       python3 epd_clock.py --page=encoder       # start on the encoder page
 """
 import signal
 import socket
 import struct
 import sys
+import threading
 import time
 import types
 from datetime import datetime
@@ -47,6 +53,8 @@ sys.modules["RPi"].GPIO = sys.modules["RPi.GPIO"]
 
 from PIL import Image, ImageDraw, ImageFont
 from waveshare_epd import epd4in2_V2, epdconfig
+
+import encoder_page
 
 FONT = "/home/admin/e-Paper/RaspberryPi_JetsonNano/python/pic/Font.ttc"
 FULL_REFRESH_SECONDS = 300
@@ -188,18 +196,36 @@ def main():
                 time.sleep(3)
         return "failed"
 
+    # A long press (from the button's callback thread) wakes the loop below to
+    # switch pages straight away instead of at the next tick.
+    page_switch = threading.Event()
+    controls = encoder_page.Controls(
+        on_hold=page_switch.set,
+        log=lambda msg: print(f"{datetime.now():%H:%M:%S} {msg}",
+                              file=sys.stderr, flush=True))
+    on_clock = "--page=encoder" not in sys.argv
+
+    def frame(now):
+        if on_clock:
+            return render(now, epd.width, epd.height, seconds)
+        return encoder_page.render(controls.snapshot(), epd.width, epd.height)
+
     try:
         now = datetime.fromtimestamp(true_time(), tz)
-        ready.value = show(render(now, epd.width, epd.height, seconds),
-                           full=True) != "failed"
+        ready.value = show(frame(now), full=True) != "failed"
         last_full = time.time()
         while not once:
-            # Sleep until the next tick of the internet-corrected clock.
-            time.sleep(interval - true_time() % interval + 0.01)
+            # Sleep until the next tick of the internet-corrected clock, or
+            # until a long press. The encoder page always ticks every second.
+            tick = interval if on_clock else 1
+            switched = page_switch.wait(tick - true_time() % tick + 0.01)
+            if switched:
+                page_switch.clear()
+                on_clock = not on_clock
             now = datetime.fromtimestamp(true_time(), tz)
-            img = render(now, epd.width, epd.height, seconds)
+            img = frame(now)
             t0 = time.time()
-            full = t0 - last_full >= FULL_REFRESH_SECONDS
+            full = switched or t0 - last_full >= FULL_REFRESH_SECONDS
             kind = show(img, full)
             ready.value = kind != "failed"
             if full or kind == "full":
@@ -211,6 +237,7 @@ def main():
         pass
     finally:
         ready.off()
+        controls.close()
         epd.sleep()
 
 

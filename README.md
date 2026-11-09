@@ -89,6 +89,27 @@ The LED's other leg goes to GND, for example pin 14 or 20.
 A GPIO pin can source only a few mA (keep under ~8 mA). Drive an LED through a
 resistor (330 ohm or more), and anything bigger through a transistor or MOSFET.
 
+### Rotary encoder and button
+
+| Signal          | Pi header pin | Pi signal | Set in code by (`encoder_page.py`) |
+|-----------------|---------------|-----------|------------------------------------|
+| Encoder A (CLK) | **40**        | GPIO 21   | `ENCODER_A_PIN`                    |
+| Encoder B (DT)  | **38**        | GPIO 20   | `ENCODER_B_PIN`                    |
+| Button          | **37**        | GPIO 26   | `BUTTON_PIN`                       |
+
+- **Encoder:** common to GND. A and B idle high; the module's own pull-ups do
+  that, and the Pi's internal pull-ups are enabled as well. If clockwise
+  counts down, swap `ENCODER_A_PIN` and `ENCODER_B_PIN`.
+- **Button:** active high, low at rest and 3.3 V while pressed. The Pi's
+  internal pull-down is enabled so the pin never floats.
+- **Debouncing** is digital: lgpio only reports a level once it has been
+  stable for 1 ms (encoder) or 20 ms (button), and the encoder's quadrature
+  state machine counts a step only after a full A/B cycle back to rest.
+
+> **Check: 3.3 V only.** If the encoder board has pull-ups (KY-040 style, `+`
+> pin), its `+` must go to 3V3 (pin 1 or 17), not 5 V, or A/B sit at 5 V on
+> 3.3 V-only pins. The same goes for whatever drives the button high.
+
 ### Header map
 
 ```
@@ -105,7 +126,9 @@ resistor (330 ohm or more), and anything bigger through a transistor or MOSFET.
    (SPI MISO)  GPIO9  [21] [22]  GPIO25    EPD DC
    EPD CLK    GPIO11  [23] [24]  GPIO8     EPD CS
                  GND  [25] [26]  GPIO7     (SPI CE1)
-                      ... 27-40 unused ...
+                      ... 27-36 unused ...
+   button     GPIO26  [37] [38]  GPIO20    encoder B (DT)
+                 GND  [39] [40]  GPIO21    encoder A (CLK)
 EPD VCC is on pin 1 (3V3).
 ```
 
@@ -130,6 +153,25 @@ Don't use them for anything else while SPI is on.
 With network, the LED goes solid about 3 minutes after power-on. Without
 network it takes 2 minutes longer, because the network-time wait has to time
 out.
+
+## Pages
+
+**Hold the button for 1 s** to switch between the two pages. The switch
+happens at once, with a full refresh.
+
+- **Clock** (at startup): time and date.
+- **Encoder:** the left third shows the encoder as a knob. The pointer and
+  the long tick mark the current detent (20 per turn), with the step count
+  and last direction below. The knob turns solid black while the button is
+  pressed; a tap between refreshes still shows on the next frame. A line of
+  raw pin levels (`A1 B1 SW0`) sits under the count for debugging. The right
+  two thirds are a rolling 5 s logic-analyser trace of the A, B and SW pin
+  levels (after debouncing), with now at the right edge and each pin's
+  current level printed after its line. A click's 4 edges take a few ms, so
+  a click shows as a narrow pulse. Clicks are marked under the time axis,
+  `+1` clockwise (A changes before B) and `-1` counter-clockwise; clicks too
+  close to label separately are summed (e.g. `+3`). The page refreshes once
+  a second, even with `--minutes`. Start on it with `--page=encoder`.
 
 ## Status LED (GPIO 18) behaviour
 
@@ -200,6 +242,7 @@ at commit `a794fbc` (2026-08-19), unmodified.
 | File                  | What it is                                                   |
 |-----------------------|--------------------------------------------------------------|
 | `epd_clock.py`        | The clock (run at boot). `--once`, `--minutes`, `--quiet`, `--tz=` |
+| `encoder_page.py`     | Encoder/button input and the encoder page (used by the clock) |
 | `start_epd_clock.sh`  | Boot wrapper run by cron                                     |
 | `~/epd_clock.log`     | Clock output (outside the repo). Not rotated, small with `--quiet` |
 | `epd_text.py`         | Write a line of text to the display                          |
@@ -212,8 +255,8 @@ at commit `a794fbc` (2026-08-19), unmodified.
 - **RPi.GPIO is stubbed out** in every script. The Waveshare driver imports it
   but does its GPIO through gpiozero/lgpio, and the installed RPi.GPIO
   (`python3-rpi-lgpio`) crashes on this B+'s revision code (`0010`).
-- **Only one display script at a time.** The clock holds GPIO 17, 18, 24 and
-  25 while running, so `epd_text.py` / `epd_dialogue.py` fail until it stops.
+- **Only one display script at a time.** The clock holds GPIO 17, 18, 20, 21, 24, 25 and 26
+  while running, so `epd_text.py` / `epd_dialogue.py` fail until it stops.
   Those two scripts also use GPIO 18 as the driver's PWR pin (high while they
   run).
 - **Panel wear.** The clock does a partial refresh every second and a full one
