@@ -3,11 +3,21 @@
 
 The time comes from the internet (SNTP query to NTP_SERVER, re-synced every
 NTP_RESYNC_SECONDS) rather than the Pi's own clock, which is left untouched.
-If the query fails, the system clock is used.
+If the query fails, the system clock is used; that is set at boot from the
+DS3231 RTC, so it stays right with no network (see README.md).
+The shown time is deliberately DISPLAY_OFFSET_SECONDS (+2 min 57 s) ahead.
 
 Updates every second with a partial refresh (as fast as the panel allows),
 and a full refresh every FULL_REFRESH_SECONDS to clear ghosting. Each refresh
 duration is logged to stderr.
+
+READY_PIN (GPIO 18, header pin 12) drives a status LED. It blinks from startup
+until the first frame is drawn, then stays high while refreshes succeed. It
+goes low if a refresh fails and when the script exits (including on SIGTERM at
+shutdown). Before this script starts, the firmware and the epd-boot-blink
+service handle the LED during boot.
+
+Wiring and setup are in /home/admin/rpi/README.md.
 
 Note: Waveshare recommends refreshing no more than about once per 3 minutes
 for long-term use; a per-second update is a stress test.
@@ -18,6 +28,7 @@ Usage: python3 epd_clock.py            # run until Ctrl-C
        python3 epd_clock.py --quiet    # don't log each refresh (for unattended runs)
        python3 epd_clock.py --tz=Europe/London   # show another timezone
 """
+import signal
 import socket
 import struct
 import sys
@@ -39,11 +50,13 @@ from waveshare_epd import epd4in2_V2, epdconfig
 
 FONT = "/home/admin/e-Paper/RaspberryPi_JetsonNano/python/pic/Font.ttc"
 FULL_REFRESH_SECONDS = 300
-TIMEZONE = "America/Los_Angeles"  # shown time; independent of the Pi's own timezone
+TIMEZONE = "America/Vancouver"  # BC: permanent UTC-7 since 2026-11-01 (tzdata 2026c); not Los_Angeles, which still falls back
 NTP_SERVER = "pool.ntp.org"
 NTP_RESYNC_SECONDS = 600
 BUSY_TIMEOUT = 15  # seconds to wait on the panel before resetting it and retrying
 NTP_EPOCH_OFFSET = 2208988800  # seconds between 1900 (NTP) and 1970 (Unix)
+READY_PIN = 18  # BCM numbering; "clock running" output (header pin 12)
+DISPLAY_OFFSET_SECONDS = 2 * 60 + 57  # added to the shown time (+2 min 57 s)
 
 
 def ntp_offset(server=NTP_SERVER, timeout=3):
@@ -116,7 +129,9 @@ def main():
     offset, last_sync = 0.0, 0.0
 
     def true_time():
-        """Internet-corrected Unix time; re-syncs the offset when it's stale."""
+        """Internet-corrected Unix time plus DISPLAY_OFFSET_SECONDS; re-syncs
+        the NTP offset when it's stale. Ticks are scheduled from this too, so
+        they line up with the shown time."""
         nonlocal offset, last_sync
         if time.time() - last_sync >= NTP_RESYNC_SECONDS:
             new = ntp_offset()
@@ -128,9 +143,25 @@ def main():
                 offset = new
                 print(f"synced with {NTP_SERVER}: system clock is "
                       f"{-offset:+.3f}s off", file=sys.stderr, flush=True)
-        return time.time() + offset
+        return time.time() + offset + DISPLAY_OFFSET_SECONDS
+
+    # Exit through the finally block below on SIGTERM (e.g. at shutdown), so the
+    # panel is put to sleep and READY_PIN drops instead of being left high.
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
 
     epd = epd4in2_V2.EPD()
+
+    # The driver drives GPIO 18 as PWR_PIN, for Waveshare boards with a 9th PWR
+    # wire that switches the panel's power. This 8-wire module has no PWR wire,
+    # so take the pin over as READY_PIN and make the driver's on/off calls no-ops.
+    impl = epdconfig.implementation
+    assert impl.PWR_PIN == READY_PIN, "driver's PWR_PIN moved; check READY_PIN"
+    ready = impl.GPIO_PWR_PIN  # gpiozero LED, already claimed (low) by the driver
+    impl.GPIO_PWR_PIN = types.SimpleNamespace(
+        on=lambda: None, off=lambda: None, close=lambda: None)
+    # Claiming the pin above ends the boot blinker; keep blinking until the
+    # first frame is up. Setting ready.value later stops the blink.
+    ready.blink(on_time=0.5, off_time=0.5)
 
     def read_busy():
         """Like the driver's ReadBusy, but gives up instead of hanging forever."""
@@ -159,7 +190,8 @@ def main():
 
     try:
         now = datetime.fromtimestamp(true_time(), tz)
-        show(render(now, epd.width, epd.height, seconds), full=True)
+        ready.value = show(render(now, epd.width, epd.height, seconds),
+                           full=True) != "failed"
         last_full = time.time()
         while not once:
             # Sleep until the next tick of the internet-corrected clock.
@@ -169,6 +201,7 @@ def main():
             t0 = time.time()
             full = t0 - last_full >= FULL_REFRESH_SECONDS
             kind = show(img, full)
+            ready.value = kind != "failed"
             if full or kind == "full":
                 last_full = time.time()
             if not quiet:
@@ -177,6 +210,7 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
+        ready.off()
         epd.sleep()
 
 
